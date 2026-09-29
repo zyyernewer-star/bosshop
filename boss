@@ -1,0 +1,560 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local CoreGui = game:GetService("CoreGui")
+
+local Player = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
+
+local Config = {
+    MainScriptURL = "https://raw.githubusercontent.com/crazyklank/Bosshop/refs/heads/main/boss",
+    KeyFileName = "EmpireKey.txt",
+    MainGuiName = "AutoBossHunterUI",
+    KeyGuiName = "EmpireKeySystem",
+    HubName = "EMPIRE",
+    HubDescription = "Unlock Empire to continue."
+}
+
+local a = 2 ^ 32
+local b = a - 1
+local function band(d, e)
+    local f, g = 0, 1
+    while d ~= 0 or e ~= 0 do
+        local h, i = d % 2, e % 2
+        local j = (h + i) % 2
+        f = f + j * g
+        d = math.floor(d / 2)
+        e = math.floor(e / 2)
+        g = g * 2
+    end
+    return f % a
+end
+local function bxor(d, e, l, ...)
+    local m
+    if e then
+        d, e = d % a, e % a
+        m = band(d, e)
+        if l then m = bxor(m, l, ...) end
+        return m
+    elseif d then
+        return d % a
+    end
+    return 0
+end
+local function bor(d, e, l, ...)
+    local m
+    if e then
+        d, e = d % a, e % a
+        m = (d + e - band(d, e)) / 2
+        if l then m = bor(m, l, ...) end
+        return m
+    elseif d then
+        return d % a
+    end
+    return b
+end
+local function bnot(p) return b - p end
+local function rshift(d, r)
+    if r < 0 then return lshift(d, -r) end
+    return math.floor(d % 2 ^ 32 / 2 ^ r)
+end
+local function shift(d, r)
+    if r > 31 or r < -31 then return 0 end
+    return rshift(d % a, r)
+end
+function lshift(d, r)
+    if r < 0 then return shift(d, -r) end
+    return d * 2 ^ r % 2 ^ 32
+end
+local function rotr(p, r)
+    if r > 31 then r = r % 32 end
+    if r < 0 then r = r % 32 end
+    local u = bor(p % a, 2 ^ r - 1)
+    return shift(p, r) + lshift(u, 32 - r)
+end
+local k = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb3,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+}
+local function hex(x)
+    return string.gsub(x, ".", function(ch) return string.format("%02x", string.byte(ch)) end)
+end
+local function pack(n, bytes)
+    local out = ""
+    for _ = 1, bytes do
+        local byte = n % 256
+        out = string.char(byte) .. out
+        n = (n - byte) / 256
+    end
+    return out
+end
+local function word(data, index)
+    local v = 0
+    for i = index, index + 3 do v = v * 256 + string.byte(data, i) end
+    return v
+end
+local function pad(data, len)
+    local h = 64 - (len + 9) % 64
+    local bitLen = pack(8 * len, 8)
+    local result = data .. "\128" .. string.rep("\0", h) .. bitLen
+    assert(#result % 64 == 0)
+    return result
+end
+local function initState(state)
+    state[1]=0x6a09e667; state[2]=0xbb67ae85; state[3]=0x3c6ef372; state[4]=0xa54ff53a
+    state[5]=0x510e527f; state[6]=0x9b05688c; state[7]=0x1f83d9ab; state[8]=0x5be0cd19
+    return state
+end
+local function compress(data, startAt, state)
+    local w = {}
+    for i = 1, 16 do w[i] = word(data, startAt + (i - 1) * 4) end
+    for i = 17, 64 do
+        local s0 = w[i - 15]
+        local s1 = w[i - 2]
+        local sigma0 = bxor(rotr(s0, 7), rotr(s0, 18), shift(s0, 3))
+        local sigma1 = bxor(rotr(s1, 17), rotr(s1, 19), shift(s1, 10))
+        w[i] = (w[i - 16] + sigma0 + w[i - 7] + sigma1) % a
+    end
+    local aa,bb,cc,dd,ee,ff,gg,hh = state[1],state[2],state[3],state[4],state[5],state[6],state[7],state[8]
+    for i = 1, 64 do
+        local S1 = bxor(rotr(ee, 6), rotr(ee, 11), rotr(ee, 25))
+        local ch = bxor(band(ee, ff), band(bnot(ee), gg))
+        local temp1 = (hh + S1 + ch + k[i] + w[i]) % a
+        local S0 = bxor(rotr(aa, 2), rotr(aa, 13), rotr(aa, 22))
+        local maj = bxor(band(aa, bb), band(aa, cc), band(bb, cc))
+        local temp2 = (S0 + maj) % a
+        hh,gg,ff,ee,dd,cc,bb,aa = gg,ff,ee,(dd + temp1) % a,cc,bb,aa,(temp1 + temp2) % a
+    end
+    state[1]=(state[1]+aa)%a; state[2]=(state[2]+bb)%a; state[3]=(state[3]+cc)%a; state[4]=(state[4]+dd)%a
+    state[5]=(state[5]+ee)%a; state[6]=(state[6]+ff)%a; state[7]=(state[7]+gg)%a; state[8]=(state[8]+hh)%a
+end
+local function sha256(data)
+    data = pad(data, #data)
+    local state = initState({})
+    for i = 1, #data, 64 do compress(data, i, state) end
+    return hex(pack(state[1],4)..pack(state[2],4)..pack(state[3],4)..pack(state[4],4)..pack(state[5],4)..pack(state[6],4)..pack(state[7],4)..pack(state[8],4))
+end
+
+local requestFn = request or http_request or (syn and syn.request) or (http and http.request)
+local clipboardFn = setclipboard or toclipboard
+local cachedLink, cachedTime = "", 0
+local proxyEndpoint = "https://eobao7qyen50wq7.m.pipedream.net"
+local cachedMainSource = nil
+local loadingStarted = false
+
+local function jsonDecode(value)
+    return HttpService:JSONDecode(value)
+end
+
+local function safeRequest(options)
+    if type(requestFn) ~= "function" then return nil, "HTTP requests not supported" end
+    local ok, response = pcall(function() return requestFn(options) end)
+    if ok and type(response) == "table" then return response end
+    return nil, "Connection Error: " .. tostring(response or "Unknown")
+end
+
+local function getIdentifier()
+    if type(gethwid) == "function" then
+        local ok, value = pcall(gethwid)
+        if ok and value then return tostring(value) end
+    end
+    local ok, value = pcall(function()
+        return game:GetService("RbxAnalyticsService"):GetClientId()
+    end)
+    if ok and value then return tostring(value) end
+    return tostring(Player.UserId)
+end
+
+local identifier = sha256(getIdentifier())
+
+math.randomseed(os.clock() * 1000000 + Player.UserId)
+
+local function proxyGet(action, extra)
+    local url = proxyEndpoint .. "/?action=" .. HttpService:UrlEncode(action) .. "&identifier=" .. HttpService:UrlEncode(identifier)
+    for name, value in pairs(extra or {}) do
+        url = url .. "&" .. HttpService:UrlEncode(tostring(name)) .. "=" .. HttpService:UrlEncode(tostring(value))
+    end
+    return safeRequest({
+        Url = url,
+        Method = "GET",
+        Headers = { ["Accept"] = "application/json" }
+    })
+end
+
+local function decodeProxyResponse(response)
+    if not response then
+        return nil, "Unable to contact key server."
+    end
+    local statusCode = tonumber(response.StatusCode or response.status_code or response.Code or response.code)
+    if statusCode and statusCode >= 400 then
+        return nil, "Key server returned HTTP " .. tostring(statusCode)
+    end
+    local body = response.Body or response.body or response.ResponseBody or response.responseBody
+    if type(body) ~= "string" then
+        return nil, "Key server returned no response."
+    end
+    local ok, decoded = pcall(jsonDecode, body)
+    if not ok or type(decoded) ~= "table" then
+        return nil, "Invalid key server response."
+    end
+    return decoded
+end
+
+local function cacheLink()
+    if cachedTime + 600 > os.time() and cachedLink ~= "" then
+        return true, cachedLink
+    end
+
+    local response, err = proxyGet("start")
+    if not response then
+        return false, err or "Unable to contact key server."
+    end
+
+    local decoded, decodeErr = decodeProxyResponse(response)
+    if not decoded then
+        return false, decodeErr
+    end
+
+    if decoded.success == true and decoded.url then
+        cachedLink = tostring(decoded.url)
+        cachedTime = os.time()
+        return true, cachedLink
+    end
+
+    return false, tostring(decoded.error or decoded.message or "Failed to generate key link.")
+end
+
+local function redeemKey(key)
+    local response, err = proxyGet("redeem", {key = key})
+    if not response then
+        return false, err or "Unable to contact key server."
+    end
+
+    local decoded, decodeErr = decodeProxyResponse(response)
+    if not decoded then
+        return false, decodeErr
+    end
+
+    if decoded.authorized == true then
+        if type(writefile) == "function" then
+            pcall(writefile, Config.KeyFileName, key)
+        end
+        return true, "Success"
+    end
+
+    return false, tostring(decoded.error or decoded.message or "Invalid key.")
+end
+
+local function verifyKey(key)
+    local response, err = proxyGet("verify", {key = key})
+    if not response then
+        return false, err or "Unable to contact key server."
+    end
+
+    local decoded, decodeErr = decodeProxyResponse(response)
+    if not decoded then
+        return false, decodeErr
+    end
+
+    if decoded.authorized == true then
+        if type(writefile) == "function" then
+            pcall(writefile, Config.KeyFileName, key)
+        end
+        return true, "Success"
+    end
+
+    if key:sub(1, 5) == "FREE_" then
+        return redeemKey(key)
+    end
+
+    return false, tostring(decoded.error or decoded.message or "Invalid key.")
+end
+
+local function destroyKeyGui()
+    pcall(function()
+        if gui and gui.Parent then
+            gui:Destroy()
+        end
+    end)
+    pcall(function()
+        local existing = PlayerGui:FindFirstChild(Config.KeyGuiName)
+        if existing then existing:Destroy() end
+    end)
+    pcall(function()
+        local existing = CoreGui:FindFirstChild(Config.KeyGuiName)
+        if existing then existing:Destroy() end
+    end)
+end
+
+local function loadMainScript()
+    if loadingStarted then return end
+    loadingStarted = true
+    destroyKeyGui()
+    task.spawn(function()
+        local ok, err = pcall(function()
+            if PlayerGui:FindFirstChild(Config.MainGuiName) then
+                PlayerGui[Config.MainGuiName]:Destroy()
+            end
+            local source = cachedMainSource
+            if type(source) ~= "string" or source == "" then
+                source = game:HttpGet(Config.MainScriptURL)
+            end
+            local fn = loadstring(source)
+            assert(type(fn) == "function", "loadstring failed")
+            fn()
+        end)
+        if not ok then
+            warn("[Empire] Main script failed to load: " .. tostring(err))
+        end
+    end)
+end
+
+if PlayerGui:FindFirstChild(Config.MainGuiName) then
+    return
+end
+
+if PlayerGui:FindFirstChild(Config.KeyGuiName) then
+    PlayerGui[Config.KeyGuiName]:Destroy()
+end
+
+gui = Instance.new("ScreenGui")
+gui.Name = Config.KeyGuiName
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.DisplayOrder = 1000000
+pcall(function() gui.Parent = CoreGui end)
+if not gui.Parent then gui.Parent = PlayerGui end
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromOffset(390, 310)
+frame.Position = UDim2.fromScale(0.5, 0.5)
+frame.AnchorPoint = Vector2.new(0.5, 0.5)
+frame.BackgroundColor3 = Color3.fromRGB(10, 12, 18)
+frame.BackgroundTransparency = 0.08
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Parent = gui
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 16)
+local frameStroke = Instance.new("UIStroke", frame)
+frameStroke.Thickness = 1.5
+frameStroke.Color = Color3.fromRGB(65, 105, 175)
+frameStroke.Transparency = 0.2
+
+local top = Instance.new("Frame")
+top.Size = UDim2.new(1, 0, 0, 58)
+top.BackgroundColor3 = Color3.fromRGB(16, 20, 30)
+top.BorderSizePixel = 0
+top.Parent = frame
+Instance.new("UICorner", top).CornerRadius = UDim.new(0, 16)
+
+local title = Instance.new("TextLabel")
+title.BackgroundTransparency = 1
+title.Position = UDim2.fromOffset(18, 8)
+title.Size = UDim2.new(1, -70, 0, 24)
+title.Font = Enum.Font.GothamBold
+title.Text = Config.HubName
+title.TextColor3 = Color3.fromRGB(125, 190, 255)
+title.TextSize = 20
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = top
+
+local subtitle = Instance.new("TextLabel")
+subtitle.BackgroundTransparency = 1
+subtitle.Position = UDim2.fromOffset(18, 31)
+subtitle.Size = UDim2.new(1, -70, 0, 18)
+subtitle.Font = Enum.Font.Gotham
+subtitle.Text = Config.HubDescription
+subtitle.TextColor3 = Color3.fromRGB(145, 155, 175)
+subtitle.TextSize = 10
+subtitle.TextXAlignment = Enum.TextXAlignment.Left
+subtitle.Parent = top
+
+local close = Instance.new("TextButton")
+close.Size = UDim2.fromOffset(30, 30)
+close.Position = UDim2.new(1, -40, 0, 14)
+close.BackgroundTransparency = 1
+close.Text = "×"
+close.TextColor3 = Color3.fromRGB(220, 225, 235)
+close.Font = Enum.Font.GothamBold
+close.TextSize = 22
+close.Parent = top
+close.Activated:Connect(function() gui:Destroy() end)
+
+local info = Instance.new("TextLabel")
+info.BackgroundTransparency = 1
+info.Position = UDim2.fromOffset(20, 78)
+info.Size = UDim2.new(1, -40, 0, 36)
+info.Font = Enum.Font.Gotham
+info.Text = "Get a key, complete the LootLabs requirements, then paste your key below."
+info.TextColor3 = Color3.fromRGB(155, 165, 185)
+info.TextSize = 11
+info.TextWrapped = true
+info.Parent = frame
+
+local keyBox = Instance.new("TextBox")
+keyBox.Size = UDim2.new(1, -40, 0, 44)
+keyBox.Position = UDim2.fromOffset(20, 124)
+keyBox.BackgroundColor3 = Color3.fromRGB(18, 22, 31)
+keyBox.BorderSizePixel = 0
+keyBox.ClearTextOnFocus = false
+keyBox.Font = Enum.Font.Gotham
+keyBox.PlaceholderText = "Enter your Empire key..."
+keyBox.PlaceholderColor3 = Color3.fromRGB(95, 105, 125)
+keyBox.Text = ""
+keyBox.TextColor3 = Color3.fromRGB(240, 245, 255)
+keyBox.TextSize = 12
+keyBox.Parent = frame
+Instance.new("UICorner", keyBox).CornerRadius = UDim.new(0, 10)
+local keyStroke = Instance.new("UIStroke", keyBox)
+keyStroke.Color = Color3.fromRGB(52, 65, 90)
+keyStroke.Transparency = 0.15
+
+local verify = Instance.new("TextButton")
+verify.Size = UDim2.new(0.48, -5, 0, 42)
+verify.Position = UDim2.fromOffset(20, 182)
+verify.BackgroundColor3 = Color3.fromRGB(30, 95, 170)
+verify.BorderSizePixel = 0
+verify.Text = "✓  VERIFY KEY"
+verify.TextColor3 = Color3.fromRGB(255,255,255)
+verify.Font = Enum.Font.GothamBold
+verify.TextSize = 11
+verify.Parent = frame
+Instance.new("UICorner", verify).CornerRadius = UDim.new(0, 10)
+
+local getKey = Instance.new("TextButton")
+getKey.Size = UDim2.new(0.48, -5, 0, 42)
+getKey.Position = UDim2.new(0.52, 0, 0, 182)
+getKey.BackgroundColor3 = Color3.fromRGB(28, 32, 42)
+getKey.BorderSizePixel = 0
+getKey.Text = "🔑  GET KEY"
+getKey.TextColor3 = Color3.fromRGB(230,235,245)
+getKey.Font = Enum.Font.GothamBold
+getKey.TextSize = 11
+getKey.Parent = frame
+Instance.new("UICorner", getKey).CornerRadius = UDim.new(0, 10)
+
+local status = Instance.new("TextLabel")
+status.BackgroundTransparency = 1
+status.Position = UDim2.fromOffset(20, 236)
+status.Size = UDim2.new(1, -40, 0, 42)
+status.Font = Enum.Font.Gotham
+status.Text = "Ready."
+status.TextColor3 = Color3.fromRGB(150, 160, 180)
+status.TextSize = 10
+status.TextWrapped = true
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.Parent = frame
+
+local dragging = false
+local dragStart
+local startPos
+
+top.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = frame.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+        end)
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if not dragging then return end
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+local function setStatus(text, color)
+    status.Text = text
+    status.TextColor3 = color or Color3.fromRGB(150,160,180)
+end
+
+local function copy(value)
+    if type(clipboardFn) == "function" then
+        local ok = pcall(clipboardFn, value)
+        return ok
+    end
+    return false
+end
+
+getKey.Activated:Connect(function()
+    setStatus("Generating your key link...", Color3.fromRGB(150,195,255))
+    local ok, link = cacheLink()
+    if not ok then
+        setStatus(tostring(link), Color3.fromRGB(255,135,135))
+        return
+    end
+    if copy(link) then
+        setStatus("Key link copied. Complete the LootLabs requirements, then return here.", Color3.fromRGB(110,220,155))
+    else
+        keyBox.Text = link
+        setStatus("Your key link is shown above. Open it and complete the requirements.", Color3.fromRGB(255,205,120))
+    end
+end)
+
+verify.Activated:Connect(function()
+    if loadingStarted or verify.Active == false then return end
+    local key = keyBox.Text:gsub("^%s+", ""):gsub("%s+$", "")
+    if key == "" then
+        setStatus("Enter your key first.", Color3.fromRGB(255,135,135))
+        return
+    end
+    verify.Active = false
+    getKey.Active = false
+    setStatus("Verifying key...", Color3.fromRGB(150,195,255))
+    task.spawn(function()
+        local ok, message = verifyKey(key)
+        if ok then
+            setStatus("Key verified. Loading Empire...", Color3.fromRGB(110,220,155))
+            loadMainScript()
+        else
+            setStatus(tostring(message or "Invalid key."), Color3.fromRGB(255,135,135))
+            verify.Active = true
+            getKey.Active = true
+        end
+    end)
+end)
+
+task.defer(function()
+    local ok, source = pcall(function()
+        return game:HttpGet(Config.MainScriptURL)
+    end)
+    if ok and type(source) == "string" and #source > 0 then
+        cachedMainSource = source
+    end
+end)
+
+if type(isfile) == "function" and type(readfile) == "function" then
+    local ok, exists = pcall(isfile, Config.KeyFileName)
+    if ok and exists then
+        local readOk, saved = pcall(readfile, Config.KeyFileName)
+        if readOk and type(saved) == "string" and saved ~= "" then
+            setStatus("Checking saved key...", Color3.fromRGB(150,195,255))
+            task.spawn(function()
+                local valid = verifyKey(saved)
+                if valid then
+                    setStatus("Saved key verified. Loading Empire...", Color3.fromRGB(110,220,155))
+                    loadMainScript()
+                else
+                    setStatus("Saved key expired or invalid.", Color3.fromRGB(255,185,95))
+                end
+            end)
+        end
+    end
+end
+
+local scale = Instance.new("UIScale")
+scale.Scale = 0.9
+scale.Parent = gui
+TweenService:Create(scale, TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
